@@ -1,0 +1,17 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Training logs
+TD3/runs/
+
+# Model weights / results
+TD3/pytorch_models/*.pth
+TD3/results/*.npy
+TD3/finetune_models/
+TD3/finetune_results/
+
+# Catkin build artifacts
+catkin_ws/build/
+catkin_ws/devel/
+catkin_ws/.catkin_workspace

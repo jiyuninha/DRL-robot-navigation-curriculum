@@ -1,0 +1,36 @@
+services:
+  drl:
+    image: drl-robot-navigation:noetic
+    container_name: drl-robot-navigation
+    stdin_open: true
+    tty: true
+
+    # 현재 디렉토리를 컨테이너 /workspace 로 마운트
+    volumes:
+      - .:/workspace:rw
+      # X11 소켓 마운트 (GUI)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+    environment:
+      # GUI 표시
+      - DISPLAY=${DISPLAY}
+      # X11 shared memory 이슈 방지(일부 앱에서 유용)
+      - QT_X11_NO_MITSHM=1
+      # NVIDIA 컨테이너 런타임 환경변수 (GPU 있을 때)
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+
+    # ROS/네트워크가 호스트와 동일해야 편하면 host 권장
+    network_mode: host
+
+    # 보통 ROS/GPU/장치 접근 편의를 위해
+    privileged: true
+
+    # compose v2 기준 GPU 활성화 방식 (docker compose plugin)
+    gpus: all
+
+    working_dir: /workspace
+
+    # 필요하면 컨테이너 들어가서 작업하기 좋게 bash
+    command: bash
+

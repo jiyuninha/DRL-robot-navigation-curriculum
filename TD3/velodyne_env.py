@@ -17,6 +17,35 @@ from std_srvs.srv import Empty
 from visualization_msgs.msg import Marker
 from visualization_msgs.msg import MarkerArray
 
+from gazebo_msgs.srv import GetWorldProperties
+
+# -------------------------------------------------------------------
+def wait_for_gazebo(timeout=30.0):
+    """/gazebo/get_world_properties 서비스가 준비될 때까지 대기."""
+    start = time.time()
+    while True:
+        try:
+            rospy.wait_for_service('/gazebo/get_world_properties', timeout=1.0)
+            return True
+        except Exception:
+            if time.time() - start > timeout:
+                rospy.logerr("Timed out waiting for /gazebo/get_world_properties")
+                return False
+            time.sleep(0.1)
+
+def model_exists(model_name, timeout=1.0):
+    """Gazebo world에 model_name이 존재하는지 확인."""
+    try:
+        rospy.wait_for_service('/gazebo/get_world_properties', timeout=timeout)
+        gwp = rospy.ServiceProxy('/gazebo/get_world_properties', GetWorldProperties)
+        resp = gwp()
+        return model_name in resp.model_names
+    except Exception as e:
+        rospy.logwarn("model_exists: get_world_properties failed: %s" % e)
+        return False
+# -------------------------------------------------------------------
+
+
 GOAL_REACHED_DIST = 0.3
 COLLISION_DIST = 0.35
 TIME_DELTA = 0.1
@@ -112,6 +141,11 @@ class GazeboEnv:
         subprocess.Popen(["roslaunch", "-p", port, fullpath])
         print("Gazebo launched!")
 
+        # --- 붙여넣기: Gazebo 서비스가 올라올 때까지 대기 ---
+        if not wait_for_gazebo(timeout=30.0):
+            raise RuntimeError("Gazebo didn't start or /gazebo/get_world_properties unavailable")
+        # ----------------------------------------------------------
+
         # Set up the ROS publishers and subscribers
         self.vel_pub = rospy.Publisher("/r1/cmd_vel", Twist, queue_size=1)
         self.set_state = rospy.Publisher(
@@ -129,6 +163,14 @@ class GazeboEnv:
         self.odom = rospy.Subscriber(
             "/r1/odom", Odometry, self.odom_callback, queue_size=1
         )
+
+        # --- 붙여넣기: 초기 토픽 메시지 수신 대기 (선택) ---
+        try:
+            rospy.wait_for_message("/r1/odom", Odometry, timeout=5.0)
+            rospy.wait_for_message("/velodyne_points", PointCloud2, timeout=5.0)
+        except Exception:
+            rospy.logwarn("Timeout waiting for initial odom/velodyne messages")
+        # ---------------------------------------------------------
 
     # Read velodyne pointcloud and turn it into distance data, then select the minimum value for each angle
     # range as state representation
@@ -183,6 +225,20 @@ class GazeboEnv:
         v_state = []
         v_state[:] = self.velodyne_data[:]
         laser_state = [v_state]
+
+        # --- 붙여넣기: odom이 아직 수신되지 않았으면 짧게 대기 ---
+        start_o = time.time()
+        while self.last_odom is None and time.time() - start_o < 1.0:
+            time.sleep(0.005)
+        if self.last_odom is None:
+            rospy.logwarn_throttle(5.0, "No odom message yet; using zero odom temporarily")
+            empty_odom = Odometry()
+            empty_odom.pose.pose.position.x = 0.0
+            empty_odom.pose.pose.position.y = 0.0
+            empty_odom.pose.pose.position.z = 0.0
+            empty_odom.pose.pose.orientation.w = 1.0
+            self.last_odom = empty_odom
+        # -------------------------------------------------------
 
         # Calculate robot heading from odometry data
         self.odom_x = self.last_odom.pose.pose.position.x
@@ -241,6 +297,25 @@ class GazeboEnv:
         except rospy.ServiceException as e:
             print("/gazebo/reset_simulation service call failed")
 
+
+        # --- 붙여넣기: reset_world 후 모델 등록 대기 ---
+        expected_models = ["r1"] + [f"cardboard_box_{i}" for i in range(5)]
+        start = time.time()
+        timeout = 8.0
+        all_ok = False
+        while time.time() - start < timeout:
+            all_ok = True
+            for m in expected_models:
+                if not model_exists(m, timeout=0.4):
+                    all_ok = False
+                    break
+            if all_ok:
+                break
+            time.sleep(0.1)
+        if not all_ok:
+            rospy.logwarn("Not all expected models present after reset; some reset calls may fail")
+        # -------------------------------------------------
+
         angle = np.random.uniform(-np.pi, np.pi)
         quaternion = Quaternion.from_euler(0.0, 0.0, angle)
         object_state = self.set_self_state
@@ -277,6 +352,13 @@ class GazeboEnv:
             print("/gazebo/unpause_physics service call failed")
 
         time.sleep(TIME_DELTA)
+
+        # --- 붙여넣기: unpause 후 최초 velodyne 메시지 수신 대기 (선택) ---
+        try:
+            rospy.wait_for_message("/velodyne_points", PointCloud2, timeout=2.0)
+        except Exception:
+            rospy.logwarn("No velodyne_points received within timeout after reset")
+        # ------------------------------------------------------------
 
         rospy.wait_for_service("/gazebo/pause_physics")
         try:
@@ -318,6 +400,22 @@ class GazeboEnv:
         return state
 
     def change_goal(self):
+
+        for i in range(5):
+            name = "cardboard_box_" + str(i)
+            # --- 붙여넣기: 모델이 Gazebo에 등록되었는지 짧게 재시도 확인 ---
+            start_re = time.time()
+            found = False
+            while time.time() - start_re < 1.0:  # 1초 동안 재시도
+                if model_exists(name, timeout=0.4):
+                    found = True
+                    break
+                time.sleep(0.05)
+            if not found:
+                rospy.logwarn("%s not present in Gazebo; skipping change_goal for this model" % name)
+                continue
+
+
         # Place a new goal and check if its location is not on one of the obstacles
         if self.upper < 10:
             self.upper += 0.004
@@ -334,9 +432,20 @@ class GazeboEnv:
     def random_box(self):
         # Randomly change the location of the boxes in the environment on each reset to randomize the training
         # environment
-        for i in range(4):
+        for i in range(5):
             name = "cardboard_box_" + str(i)
-
+            # --- 붙여넣기: 모델이 Gazebo에 등록되었는지 짧게 재시도 확인 ---
+            start_re = time.time()
+            found = False
+            while time.time() - start_re < 1.0:  # 1초 동안 재시도
+                if model_exists(name, timeout=0.4):
+                    found = True
+                    break
+                time.sleep(0.05)
+            if not found:
+                rospy.logwarn("%s not present in Gazebo; skipping set_model_state for this model" % name)
+                continue
+            # --------------------------------------------------------------
             x = 0
             y = 0
             box_ok = False

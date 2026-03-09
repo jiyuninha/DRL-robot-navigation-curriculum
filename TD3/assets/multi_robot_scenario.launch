@@ -2,7 +2,9 @@
 <arg name="gui" value="false"/>
 
    <!-- Gazebo  -->
-  <include file="$(find multi_robot_scenario)/launch/empty_world.launch" />
+  <include file="$(find multi_robot_scenario)/launch/empty_world.launch">
+    <arg name="world_name" value="/workspace/catkin_ws/src/multi_robot_scenario/launch/Maze.world"/>
+  </include>
 
   <!-- Robot with diff drive -->
   <include file="$(find multi_robot_scenario)/launch/pioneer3dx.gazebo.launch">

@@ -17,12 +17,12 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip3 install --no-cache-dir torch tensorboard squaternion
 
-RUN git clone --branch feature/docker_headless_noetic --single-branch https://github.com/reiniscimurs/DRL-robot-navigation /DRL-robot-navigation
+RUN git clone --branch main --single-branch https://github.com/jiyuninha/DRL-robot-navigation-curriculum.git /DRL-robot-navigation-curriculum
 
 RUN /bin/bash -c "source /opt/ros/noetic/setup.bash && \
-    cd DRL-robot-navigation/catkin_ws && \
+    cd DRL-robot-navigation-curriculum/catkin_ws && \
     catkin_make"
 
-RUN echo "source /DRL-robot-navigation/catkin_ws/devel/setup.bash" >> /root/.bashrc
+RUN echo "source /DRL-robot-navigation-curriculum/catkin_ws/devel/setup.bash" >> /root/.bashrc
 
 CMD ["bash"]

@@ -24,66 +24,97 @@ class Actor(nn.Module):
         return a
 
 
-# TD3 network
 class TD3(object):
     def __init__(self, state_dim, action_dim):
-        # Initialize the Actor network
         self.actor = Actor(state_dim, action_dim).to(device)
 
     def get_action(self, state):
-        # Function to get the action from the actor
         state = torch.Tensor(state.reshape(1, -1)).to(device)
         return self.actor(state).cpu().data.numpy().flatten()
 
     def load(self, filename, directory):
-        # Function to load network parameters
         self.actor.load_state_dict(
-            torch.load("%s/%s_actor.pth" % (directory, filename))
+            torch.load("%s/%s_actor.pth" % (directory, filename), map_location=device)
         )
 
 
-# Set the parameters for the implementation
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # cuda or cpu
-seed = 0  # Random seed number
-max_ep = 500  # maximum number of steps per episode
-file_name = "TD3_velodyne"  # name of the file to load the policy from
+# =========================
+# Parameters
+# =========================
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+seed = 0
+max_ep = 500
+file_name = "TD3_velodyne"
 
-
-# Create the testing environment
+num_eval_episodes = 10000   # 평가 episode 수
 environment_dim = 20
 robot_dim = 4
-env = GazeboEnv("multi_robot_scenario.launch", environment_dim)
-time.sleep(5)
-torch.manual_seed(seed)
-np.random.seed(seed)
 state_dim = environment_dim + robot_dim
 action_dim = 2
 
-# Create the network
+torch.manual_seed(seed)
+np.random.seed(seed)
+
+# =========================
+# Environment / Network
+# =========================
+env = GazeboEnv("multi_robot_scenario.launch", environment_dim)
+time.sleep(5)
+
 network = TD3(state_dim, action_dim)
 try:
     network.load(file_name, "./pytorch_models")
-except:
-    raise ValueError("Could not load the stored model parameters")
+except Exception as e:
+    raise ValueError(f"Could not load the stored model parameters: {e}")
 
-done = False
-episode_timesteps = 0
-state = env.reset()
 
-# Begin the testing loop
-while True:
-    action = network.get_action(np.array(state))
+# =========================
+# Evaluation
+# =========================
+success_count = 0
 
-    # Update action to fall in range [0,1] for linear velocity and [-1,1] for angular velocity
-    a_in = [(action[0] + 1) / 2, action[1]]
-    next_state, reward, done, target = env.step(a_in)
-    done = 1 if episode_timesteps + 1 == max_ep else int(done)
+for episode in range(num_eval_episodes):
+    state = env.reset()
+    done = False
+    episode_timesteps = 0
+    episode_success = False
 
-    # On termination of episode
-    if done:
-        state = env.reset()
-        done = False
-        episode_timesteps = 0
-    else:
+    while not done and episode_timesteps < max_ep:
+        action = network.get_action(np.array(state))
+
+        # linear velocity: [0, 1], angular velocity: [-1, 1]
+        a_in = [(action[0] + 1) / 2, action[1]]
+
+        next_state, reward, done, target = env.step(a_in)
+
+        # target이 True면 성공으로 간주
+        if target:
+            episode_success = True
+
         state = next_state
         episode_timesteps += 1
+
+        # max step 도달 시 episode 종료 처리
+        if episode_timesteps >= max_ep:
+            done = True
+
+    if episode_success:
+        success_count += 1
+
+    # 중간 진행상황 출력
+    if (episode + 1) % 100 == 0:
+        success_rate = 100.0 * success_count / (episode + 1)
+        print(
+            f"[Evaluation] Episode {episode + 1}/{num_eval_episodes} | "
+            f"Successes: {success_count} | Success Rate: {success_rate:.2f}%"
+        )
+
+# =========================
+# Final result
+# =========================
+final_success_rate = 100.0 * success_count / num_eval_episodes
+print("\n========== Evaluation Finished ==========")
+print(f"Total Episodes   : {num_eval_episodes}")
+print(f"Successful Epis. : {success_count}")
+print(f"Success Rate     : {final_success_rate:.2f}%")
+print("=========================================\n")

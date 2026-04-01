@@ -3,7 +3,7 @@
 
    <!-- Gazebo  -->
   <include file="$(find multi_robot_scenario)/launch/empty_world.launch">
-    <arg name="world_name" value="/workspace/catkin_ws/src/multi_robot_scenario/launch/Maze.world"/>
+    <arg name="world_name" value="/workspace/catkin_ws/src/multi_robot_scenario/launch/Test.world"/>
   </include>
 
   <!-- Robot with diff drive -->
@@ -13,6 +13,6 @@
    </include>
 
   <!-- RVIZ -->
-  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find multi_robot_scenario)/launch/pioneer3dx.rviz" />
+  <!--<node pkg="rviz" type="rviz" name="rviz" args="-d $(find multi_robot_scenario)/launch/pioneer3dx.rviz" />-->
 
 </launch>

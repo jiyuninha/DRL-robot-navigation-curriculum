@@ -1,7 +1,7 @@
 services:
   drl:
     image: drl-robot-navigation:noetic
-    container_name: drl-robot-navigation
+    container_name: drl-robot-navigation-curriculum
     stdin_open: true
     tty: true
 
@@ -28,7 +28,6 @@ services:
 
     # compose v2 기준 GPU 활성화 방식 (docker compose plugin)
     gpus: all
-
     working_dir: /workspace
 
     # 필요하면 컨테이너 들어가서 작업하기 좋게 bash

@@ -50,45 +50,172 @@ GOAL_REACHED_DIST = 0.3
 COLLISION_DIST = 0.35
 TIME_DELTA = 0.1
 
+# =========================
+# Footprint / clearance params
+# =========================
+ROBOT_RADIUS = 0.22
+SAFETY_MARGIN = 0.10
+CLEARANCE_RADIUS = ROBOT_RADIUS + SAFETY_MARGIN
 
-# Check if the random goal position is located on an obstacle and do not accept it if it is
-def check_pos(x, y):
-    goal_ok = True
+GOAL_CLEARANCE_ANGLE_SAMPLES = 36
+GOAL_CLEARANCE_RADIAL_SAMPLES = 6
 
-    if -3.8 > x > -6.2 and 6.2 > y > 3.8:
-        goal_ok = False
+BOX_CLEARANCE_MARGIN = 0.20
+SPAWN_CLEARANCE_RADIUS = 0.85
+GOAL_STRICT_RADIUS = 1.00
+GOAL_RELAXED_RADIUS = 0.80
+GOAL_INNER_MARGIN = 0.18
+PATH_STRICT_MARGIN = 0.30
+PATH_RELAXED_MARGIN = 0.25
 
-    if -1.3 > x > -2.7 and 4.7 > y > -0.2:
-        goal_ok = False
 
-    if -0.3 > x > -4.2 and 2.7 > y > 1.3:
-        goal_ok = False
+def is_in_inflated_rect(x, y, xmin, xmax, ymin, ymax, margin):
+    return (xmin - margin) <= x <= (xmax + margin) and \
+           (ymin - margin) <= y <= (ymax + margin)
 
-    if -0.8 > x > -4.2 and -2.3 > y > -4.2:
-        goal_ok = False
 
-    if -1.3 > x > -3.7 and -0.8 > y > -2.7:
-        goal_ok = False
+def check_pos(x, y, margin=CLEARANCE_RADIUS):
+    """
+    고정 Gazebo world 기준 point validity 검사.
+    margin만큼 obstacle inflation을 적용한다.
 
-    if 4.2 > x > 0.8 and -1.8 > y > -3.2:
-        goal_ok = False
+    주의:
+    - 회전된 wall들은 보수적으로 axis-aligned bounding box(AABB)로 막음
+    - table은 다리만이 아니라 tabletop footprint 전체를 보수적으로 막음
+      (goal이 table 아래로 생성되는 것까지 막기 위함)
+    - cardboard_box_*와 small_crate_1도 현재 고정 world의 장애물로 포함
+    """
+    # -------------------------------------------------
+    # 1) outer boundary
+    # current code / sampling 범위와 맞춰 보수적으로 유지
+    # -------------------------------------------------
+    if x > 4.5 - margin or x < -4.5 + margin or y > 4.5 - margin or y < -4.5 + margin:
+        return False
 
-    if 4 > x > 2.5 and 0.7 > y > -3.2:
-        goal_ok = False
+    # -------------------------------------------------
+    # 2) fixed obstacles from world file
+    # format: (xmin, xmax, ymin, ymax)
+    # -------------------------------------------------
+    fixed_rects = [
+        # ===== interior walls around (-2.95, 2.6) =====
+        (-4.20, -1.70,  2.58,  2.73),   # Wall_11
+        (-3.03, -2.88,  1.19,  3.94),   # Wall_13
 
-    if 6.2 > x > 3.8 and -3.3 > y > -4.2:
-        goal_ok = False
+        # ===== top-right room / enclosure =====
+        ( 2.89,  4.16,  3.75,  3.90),   # Wall_15
+        ( 2.93,  4.18,  2.94,  3.09),   # Wall_17
+        ( 3.99,  4.19,  2.94,  3.90),   # Wall_16 (rotated, conservative AABB)
+        ( 2.88,  3.08,  2.94,  3.90),   # Wall_18 (rotated, conservative AABB)
 
-    if 4.2 > x > 1.3 and 3.7 > y > 1.5:
-        goal_ok = False
+        # ===== bottom-left angled enclosure =====
+        (-4.22, -3.18, -4.21, -2.38),   # Wall_24 (rotated, conservative AABB)
+        (-3.38, -2.16, -4.21, -2.38),   # Wall_25 (rotated, conservative AABB)
+        (-4.19, -2.19, -4.16, -4.01),   # Wall_26
 
-    if -3.0 > x > -7.2 and 0.5 > y > -1.5:
-        goal_ok = False
+        # ===== right-bottom corridor / corner =====
+        ( 2.31,  4.06, -3.36, -3.21),   # Wall_28
+        ( 3.93,  4.08, -3.34, -0.84),   # Wall_29
 
-    if x > 4.5 or x < -4.5 or y > 4.5 or y < -4.5:
-        goal_ok = False
+        # ===== bookshelf =====
+        # bookshelf pose: (4.78412, -3.73836), overall conservative footprint
+        ( 4.33,  5.24, -4.14, -3.72),
 
-    return goal_ok
+        # ===== table =====
+        # table pose: (-4.34248, -0.532954), tabletop footprint 전체를 보수적으로 차단
+        (-5.10, -3.59, -0.93, -0.13),
+
+        # ===== cardboard_box_* (fixed world positions) =====
+        # size = 0.5 x 0.4
+        ( 3.72,  4.22,  0.78,  1.18),   # cardboard_box_0
+        (-0.25,  0.26, -4.17, -3.76),   # cardboard_box_1
+        (-0.27,  0.24,  3.79,  4.19),   # cardboard_box_2
+        ( 1.55,  2.05,  1.00,  1.40),   # cardboard_box_3
+        (-1.85, -1.35,  0.80,  1.20),   # cardboard_box_4
+        ( 0.65,  1.15, -1.70, -1.30),   # cardboard_box_5
+        (-2.45, -1.95, -1.60, -1.20),   # cardboard_box_6
+
+        # ===== small crate =====
+        # size = 0.6 x 0.5
+        ( 0.70,  1.30,  2.55,  3.05),   # small_crate_1
+    ]
+
+    for xmin, xmax, ymin, ymax in fixed_rects:
+        if is_in_inflated_rect(x, y, xmin, xmax, ymin, ymax, margin):
+            return False
+
+    # -------------------------------------------------
+    # 3) optional: fire hydrant near top-left corner
+    # 거의 boundary에 붙어 있어서 boundary 검사로 대부분 걸러지지만,
+    # 혹시 몰라 보수적으로 원형 금지영역 추가
+    # -------------------------------------------------
+    fire_hydrant_x = -4.57173
+    fire_hydrant_y =  4.55086
+    fire_hydrant_radius = 0.20
+
+    if (x - fire_hydrant_x) ** 2 + (y - fire_hydrant_y) ** 2 <= (fire_hydrant_radius + margin) ** 2:
+        return False
+
+    return True
+
+
+def check_goal_clearance(goal_x, goal_y, clearance=CLEARANCE_RADIUS, grid_step=0.05, inner_margin=GOAL_INNER_MARGIN):
+    """
+    goal 중심 반경 clearance 내부가 실제로 충분히 비어 있는지
+    격자 기반으로 더 엄격하게 검사한다.
+    """
+    if not check_pos(goal_x, goal_y, margin=inner_margin):
+        return False
+
+    x_vals = np.arange(goal_x - clearance, goal_x + clearance + grid_step, grid_step)
+    y_vals = np.arange(goal_y - clearance, goal_y + clearance + grid_step, grid_step)
+
+    for x in x_vals:
+        for y in y_vals:
+            if (x - goal_x) ** 2 + (y - goal_y) ** 2 <= clearance ** 2:
+                if not check_pos(x, y, margin=inner_margin):
+                    return False
+
+    return True
+
+
+def is_pose_valid(x, y, clearance=CLEARANCE_RADIUS, inner_margin=GOAL_INNER_MARGIN):
+    """
+    spawn / goal 공통 validity 검사:
+    1) inflated obstacle 기준 빠른 검사
+    2) 주변 clearance 격자 검사
+    """
+    if not check_pos(x, y, margin=clearance):
+        return False
+
+    if not check_goal_clearance(x, y, clearance=clearance, inner_margin=inner_margin):
+        return False
+
+    return True
+
+def is_path_clear(start_x, start_y, goal_x, goal_y, margin=0.25, step=0.10):
+    """
+    현재 로봇 위치에서 goal까지의 직선 경로를 따라
+    최소한의 접근 가능성이 있는지 검사한다.
+    완전한 planner는 아니지만, 너무 좁은 곳 / 막힌 곳을 많이 걸러준다.
+    """
+    dx = goal_x - start_x
+    dy = goal_y - start_y
+    dist = math.sqrt(dx * dx + dy * dy)
+
+    if dist < 1e-6:
+        return False
+
+    num_steps = max(2, int(dist / step))
+
+    for i in range(1, num_steps + 1):
+        t = float(i) / float(num_steps)
+        x = start_x + t * dx
+        y = start_y + t * dy
+
+        if not check_pos(x, y, margin=margin):
+            return False
+
+    return True
 
 
 class GazeboEnv:
@@ -129,7 +256,6 @@ class GazeboEnv:
 
         print("Roscore launched!")
 
-        # Launch the simulation with the given launchfile name
         rospy.init_node("gym", anonymous=True)
         if launchfile.startswith("/"):
             fullpath = launchfile
@@ -141,12 +267,9 @@ class GazeboEnv:
         subprocess.Popen(["roslaunch", "-p", port, fullpath])
         print("Gazebo launched!")
 
-        # --- 붙여넣기: Gazebo 서비스가 올라올 때까지 대기 ---
         if not wait_for_gazebo(timeout=30.0):
             raise RuntimeError("Gazebo didn't start or /gazebo/get_world_properties unavailable")
-        # ----------------------------------------------------------
 
-        # Set up the ROS publishers and subscribers
         self.vel_pub = rospy.Publisher("/r1/cmd_vel", Twist, queue_size=1)
         self.set_state = rospy.Publisher(
             "gazebo/set_model_state", ModelState, queue_size=10
@@ -164,16 +287,12 @@ class GazeboEnv:
             "/r1/odom", Odometry, self.odom_callback, queue_size=1
         )
 
-        # --- 붙여넣기: 초기 토픽 메시지 수신 대기 (선택) ---
         try:
             rospy.wait_for_message("/r1/odom", Odometry, timeout=5.0)
             rospy.wait_for_message("/velodyne_points", PointCloud2, timeout=5.0)
         except Exception:
             rospy.logwarn("Timeout waiting for initial odom/velodyne messages")
-        # ---------------------------------------------------------
 
-    # Read velodyne pointcloud and turn it into distance data, then select the minimum value for each angle
-    # range as state representation
     def velodyne_callback(self, v):
         data = list(pc2.read_points(v, skip_nans=False, field_names=("x", "y", "z")))
         self.velodyne_data = np.ones(self.environment_dim) * 10
@@ -182,7 +301,9 @@ class GazeboEnv:
                 dot = data[i][0] * 1 + data[i][1] * 0
                 mag1 = math.sqrt(math.pow(data[i][0], 2) + math.pow(data[i][1], 2))
                 mag2 = math.sqrt(math.pow(1, 2) + math.pow(0, 2))
-                beta = math.acos(dot / (mag1 * mag2)) * np.sign(data[i][1])
+                if mag1 == 0 or mag2 == 0:
+                    continue
+                beta = math.acos(np.clip(dot / (mag1 * mag2), -1.0, 1.0)) * np.sign(data[i][1])
                 dist = math.sqrt(data[i][0] ** 2 + data[i][1] ** 2 + data[i][2] ** 2)
 
                 for j in range(len(self.gaps)):
@@ -193,11 +314,9 @@ class GazeboEnv:
     def odom_callback(self, od_data):
         self.last_odom = od_data
 
-    # Perform an action and read a new state
     def step(self, action):
         target = False
 
-        # Publish the robot action
         vel_cmd = Twist()
         vel_cmd.linear.x = action[0]
         vel_cmd.angular.z = action[1]
@@ -207,26 +326,22 @@ class GazeboEnv:
         rospy.wait_for_service("/gazebo/unpause_physics")
         try:
             self.unpause()
-        except (rospy.ServiceException) as e:
+        except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
-        # propagate state for TIME_DELTA seconds
         time.sleep(TIME_DELTA)
 
         rospy.wait_for_service("/gazebo/pause_physics")
         try:
-            pass
             self.pause()
-        except (rospy.ServiceException) as e:
+        except rospy.ServiceException:
             print("/gazebo/pause_physics service call failed")
 
-        # read velodyne laser state
         done, collision, min_laser = self.observe_collision(self.velodyne_data)
         v_state = []
         v_state[:] = self.velodyne_data[:]
         laser_state = [v_state]
 
-        # --- 붙여넣기: odom이 아직 수신되지 않았으면 짧게 대기 ---
         start_o = time.time()
         while self.last_odom is None and time.time() - start_o < 1.0:
             time.sleep(0.005)
@@ -238,9 +353,7 @@ class GazeboEnv:
             empty_odom.pose.pose.position.z = 0.0
             empty_odom.pose.pose.orientation.w = 1.0
             self.last_odom = empty_odom
-        # -------------------------------------------------------
 
-        # Calculate robot heading from odometry data
         self.odom_x = self.last_odom.pose.pose.position.x
         self.odom_y = self.last_odom.pose.pose.position.y
         quaternion = Quaternion(
@@ -252,23 +365,24 @@ class GazeboEnv:
         euler = quaternion.to_euler(degrees=False)
         angle = round(euler[2], 4)
 
-        # Calculate distance to the goal from the robot
         distance = np.linalg.norm(
             [self.odom_x - self.goal_x, self.odom_y - self.goal_y]
         )
 
-        # Calculate the relative angle between the robots heading and heading toward the goal
         skew_x = self.goal_x - self.odom_x
         skew_y = self.goal_y - self.odom_y
         dot = skew_x * 1 + skew_y * 0
         mag1 = math.sqrt(math.pow(skew_x, 2) + math.pow(skew_y, 2))
-        mag2 = math.sqrt(math.pow(1, 2) + math.pow(0, 2))
-        beta = math.acos(dot / (mag1 * mag2))
+        mag2 = 1.0
+        if mag1 == 0:
+            beta = 0.0
+        else:
+            beta = math.acos(np.clip(dot / (mag1 * mag2), -1.0, 1.0))
         if skew_y < 0:
             if skew_x < 0:
                 beta = -beta
             else:
-                beta = 0 - beta
+                beta = -beta
         theta = beta - angle
         if theta > np.pi:
             theta = np.pi - theta
@@ -277,7 +391,6 @@ class GazeboEnv:
             theta = -np.pi - theta
             theta = np.pi - theta
 
-        # Detect if the goal has been reached and give a large positive reward
         if distance < GOAL_REACHED_DIST:
             target = True
             done = True
@@ -288,18 +401,13 @@ class GazeboEnv:
         return state, reward, done, target
 
     def reset(self):
-
-        # Resets the state of the environment and returns an initial observation.
         rospy.wait_for_service("/gazebo/reset_world")
         try:
             self.reset_proxy()
-
-        except rospy.ServiceException as e:
+        except rospy.ServiceException:
             print("/gazebo/reset_simulation service call failed")
 
-
-        # --- 붙여넣기: reset_world 후 모델 등록 대기 ---
-        expected_models = ["r1"] + [f"cardboard_box_{i}" for i in range(5)]
+        expected_models = ["r1"] + [f"cardboard_box_{i}" for i in range(7)]
         start = time.time()
         timeout = 8.0
         all_ok = False
@@ -314,22 +422,28 @@ class GazeboEnv:
             time.sleep(0.1)
         if not all_ok:
             rospy.logwarn("Not all expected models present after reset; some reset calls may fail")
-        # -------------------------------------------------
 
         angle = np.random.uniform(-np.pi, np.pi)
         quaternion = Quaternion.from_euler(0.0, 0.0, angle)
         object_state = self.set_self_state
 
-        x = 0
-        y = 0
+        x = 0.0
+        y = 0.0
         position_ok = False
-        while not position_ok:
-            x = np.random.uniform(-4.5, 4.5)
-            y = np.random.uniform(-4.5, 4.5)
-            position_ok = check_pos(x, y)
+        max_trials = 3000
+
+        for _ in range(max_trials):
+            x = np.random.uniform(-4.2, 4.2)
+            y = np.random.uniform(-4.2, 4.2)
+            if is_pose_valid(x, y, clearance=SPAWN_CLEARANCE_RADIUS, inner_margin=0.15):
+                position_ok = True
+                break
+
+        if not position_ok:
+            raise RuntimeError("Failed to find robot spawn with sufficient surrounding clearance.")
+
         object_state.pose.position.x = x
         object_state.pose.position.y = y
-        # object_state.pose.position.z = 0.
         object_state.pose.orientation.x = quaternion.x
         object_state.pose.orientation.y = quaternion.y
         object_state.pose.orientation.z = quaternion.z
@@ -339,32 +453,29 @@ class GazeboEnv:
         self.odom_x = object_state.pose.position.x
         self.odom_y = object_state.pose.position.y
 
-        # set a random goal in empty space in environment
         self.change_goal()
-        # randomly scatter boxes in the environment
-        self.random_box()
+        # self.random_box()
         self.publish_markers([0.0, 0.0])
 
         rospy.wait_for_service("/gazebo/unpause_physics")
         try:
             self.unpause()
-        except (rospy.ServiceException) as e:
+        except rospy.ServiceException:
             print("/gazebo/unpause_physics service call failed")
 
         time.sleep(TIME_DELTA)
 
-        # --- 붙여넣기: unpause 후 최초 velodyne 메시지 수신 대기 (선택) ---
         try:
             rospy.wait_for_message("/velodyne_points", PointCloud2, timeout=2.0)
         except Exception:
             rospy.logwarn("No velodyne_points received within timeout after reset")
-        # ------------------------------------------------------------
 
         rospy.wait_for_service("/gazebo/pause_physics")
         try:
             self.pause()
-        except (rospy.ServiceException) as e:
+        except rospy.ServiceException:
             print("/gazebo/pause_physics service call failed")
+
         v_state = []
         v_state[:] = self.velodyne_data[:]
         laser_state = [v_state]
@@ -378,14 +489,17 @@ class GazeboEnv:
 
         dot = skew_x * 1 + skew_y * 0
         mag1 = math.sqrt(math.pow(skew_x, 2) + math.pow(skew_y, 2))
-        mag2 = math.sqrt(math.pow(1, 2) + math.pow(0, 2))
-        beta = math.acos(dot / (mag1 * mag2))
+        mag2 = 1.0
+        if mag1 == 0:
+            beta = 0.0
+        else:
+            beta = math.acos(np.clip(dot / (mag1 * mag2), -1.0, 1.0))
 
         if skew_y < 0:
             if skew_x < 0:
                 beta = -beta
             else:
-                beta = 0 - beta
+                beta = -beta
         theta = beta - angle
 
         if theta > np.pi:
@@ -400,44 +514,146 @@ class GazeboEnv:
         return state
 
     def change_goal(self):
-
-        for i in range(5):
-            name = "cardboard_box_" + str(i)
-            # --- 붙여넣기: 모델이 Gazebo에 등록되었는지 짧게 재시도 확인 ---
-            start_re = time.time()
-            found = False
-            while time.time() - start_re < 1.0:  # 1초 동안 재시도
-                if model_exists(name, timeout=0.4):
-                    found = True
-                    break
-                time.sleep(0.05)
-            if not found:
-                rospy.logwarn("%s not present in Gazebo; skipping change_goal for this model" % name)
-                continue
-
-
-        # Place a new goal and check if its location is not on one of the obstacles
         if self.upper < 10:
             self.upper += 0.004
         if self.lower > -10:
             self.lower -= 0.004
 
-        goal_ok = False
+        sample_min_x = max(-3.8, self.odom_x + self.lower)
+        sample_max_x = min(3.8, self.odom_x + self.upper)
+        sample_min_y = max(-3.8, self.odom_y + self.lower)
+        sample_max_y = min(3.8, self.odom_y + self.upper)
 
-        while not goal_ok:
-            self.goal_x = self.odom_x + random.uniform(self.upper, self.lower)
-            self.goal_y = self.odom_y + random.uniform(self.upper, self.lower)
-            goal_ok = check_pos(self.goal_x, self.goal_y)
+        min_goal_dist_from_robot = 1.8
+        max_goal_dist_from_robot = 5.5
+
+        # 최근 goal과 너무 가까운 위치 반복 방지용
+        # self.recent_goals가 없으면 여기서 생성
+        if not hasattr(self, "recent_goals"):
+            self.recent_goals = []
+
+        recent_goal_min_dist = 1.5
+        max_recent_goals = 8
+
+        max_trials = 4000
+
+        def far_from_recent_goals(x, y):
+            for gx, gy in self.recent_goals:
+                if np.linalg.norm([x - gx, y - gy]) < recent_goal_min_dist:
+                    return False
+            return True
+
+        def candidate_score(x, y, distance_to_robot, target_dist):
+            """
+            점수가 작을수록 더 좋은 후보.
+            - 목표 거리(target_dist)에 가까울수록 좋음
+            - 최근 goal들과 멀수록 좋음
+            - map 중앙/특정 corridor에만 몰리지 않도록 약간의 랜덤성 부여
+            """
+            dist_term = abs(distance_to_robot - target_dist)
+
+            if len(self.recent_goals) > 0:
+                min_recent_dist = min(np.linalg.norm([x - gx, y - gy]) for gx, gy in self.recent_goals)
+            else:
+                min_recent_dist = 3.0
+
+            # 최근 goal과 멀수록 유리하게
+            diversity_bonus = -0.35 * min(min_recent_dist, 3.0)
+
+            # 완전 deterministic하게 best 하나만 고르지 않도록 작은 랜덤성 추가
+            random_jitter = random.uniform(0.0, 0.25)
+
+            return dist_term + diversity_bonus + random_jitter
+
+        # strict -> relaxed -> fallback 순서
+        phase_settings = [
+            ("strict", GOAL_STRICT_RADIUS, PATH_STRICT_MARGIN, 0.10, 2.8, 4.2),
+            ("relaxed", GOAL_RELAXED_RADIUS, PATH_RELAXED_MARGIN, 0.08, 2.3, 4.5),
+            ("fallback", 0.55, 0.18, 0.10, 2.0, 4.8),
+        ]
+
+        for label, radius, path_margin, path_step, target_dist_min, target_dist_max in phase_settings:
+            valid_candidates = []
+            target_dist = random.uniform(target_dist_min, target_dist_max)
+
+            for _ in range(max_trials):
+                cand_x = random.uniform(sample_min_x, sample_max_x)
+                cand_y = random.uniform(sample_min_y, sample_max_y)
+
+                distance_to_robot = np.linalg.norm([cand_x - self.odom_x, cand_y - self.odom_y])
+
+                if distance_to_robot < min_goal_dist_from_robot:
+                    continue
+                if distance_to_robot > max_goal_dist_from_robot:
+                    continue
+
+                # 최근 goal과 너무 가까운 위치는 우선 제외
+                if not far_from_recent_goals(cand_x, cand_y):
+                    continue
+
+                if not is_pose_valid(
+                    cand_x,
+                    cand_y,
+                    clearance=radius,
+                    inner_margin=GOAL_INNER_MARGIN if label != "fallback" else 0.08,
+                ):
+                    continue
+
+                # fallback에서는 path 조건을 약간 완화
+                if label != "fallback":
+                    if not is_path_clear(
+                        self.odom_x,
+                        self.odom_y,
+                        cand_x,
+                        cand_y,
+                        margin=path_margin,
+                        step=path_step,
+                    ):
+                        continue
+                else:
+                    # fallback은 path_clear를 완전히 버리진 않되 더 느슨하게
+                    if not is_path_clear(
+                        self.odom_x,
+                        self.odom_y,
+                        cand_x,
+                        cand_y,
+                        margin=0.14,
+                        step=0.12,
+                    ):
+                        continue
+
+                score = candidate_score(cand_x, cand_y, distance_to_robot, target_dist)
+                valid_candidates.append((score, cand_x, cand_y))
+
+            if len(valid_candidates) > 0:
+                valid_candidates.sort(key=lambda item: item[0])
+
+                # 상위 후보들 중 하나를 랜덤하게 선택해서
+                # 계속 같은 위치만 반복되지 않도록 함
+                top_k = min(15, len(valid_candidates))
+                chosen = random.choice(valid_candidates[:top_k])
+
+                self.goal_x = chosen[1]
+                self.goal_y = chosen[2]
+
+                self.recent_goals.append((self.goal_x, self.goal_y))
+                if len(self.recent_goals) > max_recent_goals:
+                    self.recent_goals.pop(0)
+
+                return
+
+            rospy.logwarn("Failed to find %s valid goal; trying next phase." % label)
+
+        # 정말 못 찾는 경우: 이전 goal 유지
+        rospy.logwarn("Failed to find valid goal; keeping previous goal.")
+        return
 
     def random_box(self):
-        # Randomly change the location of the boxes in the environment on each reset to randomize the training
-        # environment
-        for i in range(5):
+        for i in range(7):
             name = "cardboard_box_" + str(i)
-            # --- 붙여넣기: 모델이 Gazebo에 등록되었는지 짧게 재시도 확인 ---
             start_re = time.time()
             found = False
-            while time.time() - start_re < 1.0:  # 1초 동안 재시도
+            while time.time() - start_re < 1.0:
                 if model_exists(name, timeout=0.4):
                     found = True
                     break
@@ -445,18 +661,32 @@ class GazeboEnv:
             if not found:
                 rospy.logwarn("%s not present in Gazebo; skipping set_model_state for this model" % name)
                 continue
-            # --------------------------------------------------------------
-            x = 0
-            y = 0
+
+            x = 0.0
+            y = 0.0
             box_ok = False
-            while not box_ok:
-                x = np.random.uniform(-6, 6)
-                y = np.random.uniform(-6, 6)
-                box_ok = check_pos(x, y)
+            max_trials = 500
+
+            for _ in range(max_trials):
+                x = np.random.uniform(-4.5, 4.5)
+                y = np.random.uniform(-4.5, 4.5)
+
+                box_ok = check_pos(x, y, margin=BOX_CLEARANCE_MARGIN)
+                if not box_ok:
+                    continue
+
                 distance_to_robot = np.linalg.norm([x - self.odom_x, y - self.odom_y])
                 distance_to_goal = np.linalg.norm([x - self.goal_x, y - self.goal_y])
                 if distance_to_robot < 1.5 or distance_to_goal < 1.5:
                     box_ok = False
+                    continue
+
+                break
+
+            if not box_ok:
+                rospy.logwarn("Failed to place %s with clearance; skipping placement update." % name)
+                continue
+
             box_state = ModelState()
             box_state.model_name = name
             box_state.pose.position.x = x
@@ -469,7 +699,6 @@ class GazeboEnv:
             self.set_state.publish(box_state)
 
     def publish_markers(self, action):
-        # Publish visual data in Rviz
         markerArray = MarkerArray()
         marker = Marker()
         marker.header.frame_id = "odom"
@@ -488,7 +717,6 @@ class GazeboEnv:
         marker.pose.position.z = 0
 
         markerArray.markers.append(marker)
-
         self.publisher.publish(markerArray)
 
         markerArray2 = MarkerArray()
@@ -533,7 +761,6 @@ class GazeboEnv:
 
     @staticmethod
     def observe_collision(laser_data):
-        # Detect a collision from laser data
         min_laser = min(laser_data)
         if min_laser < COLLISION_DIST:
             return True, True, min_laser
